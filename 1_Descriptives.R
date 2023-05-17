@@ -1,17 +1,3 @@
-# paper concept:
-
-# which metabolites make sense to look at?
-# how are they distributed?
-# are there clusters?
-# do they help predict adversity/psychopathology
-
-
-# questions:
-
-# what percent of missings is tolerable to retain (and impute) variables?
-# how about hard to show metabolites? Can we set them to zero and see how important they are?
-
-
 
 library("here")
 library("psych")
@@ -69,32 +55,12 @@ numOut <- function(x){
 hist(apply(df_trans, 2, numOut))
 
 
-# smaller dataframe of metabolites with few missings
-
-sum(dfDescribe$n/nrow(df_trans) == 1)
-sum(dfDescribe$n/nrow(df_trans) > 0.95)
-sum(dfDescribe$n/nrow(df_trans) > 0.90)
-
-fullDatInd <- dfDescribe$n/nrow(df_trans) == 1
-
-df_trans_s <- df_trans[, fullDatInd]
-
-sum(complete.cases(df_trans_s))
-
-corrM_noMiss <- cor(df_trans_s, method = "spearman")
-corrplot(corrM_noMiss)
-
-mean(corrM_noMiss)
-sd(corrM_noMiss)
-hist(corrM_noMiss)
-
-
 
 # boxcox tranformed data
 
 boxcoxTrans <- function(x){
   
-  lambdaTrace <- boxcox(lm(x ~ 1))
+  lambdaTrace <- boxcox(x ~ 1)
   lambda <- lambdaTrace$x[which.max(lambdaTrace$y)]
   
   if(lambda == 0){
@@ -108,60 +74,96 @@ boxcoxTrans <- function(x){
 }
 
 
-df_trans_s_box <- apply(df_trans_s, 2, boxcoxTrans)
+df_trans_box <- apply(df_trans, 2, boxcoxTrans)
 
-corrM_noMiss_box <- cor(df_trans_s_box)
-mean(corrM_noMiss_box)
+corrM_box <- cor(df_trans_box, use = "pairwise.complete.obs")
+corDistr <- corrM_box[upper.tri(corrM_box)]
+mean(corDistr)
+sd(corDistr)
 
+ggplot() +
+  geom_histogram(aes(x = corDistr), color = "black", fill = "grey") +
+  
+  ylab("Frequency") + xlab("Bivariate Correlations") +
+  
+  theme_classic()
 
+ggsave(here("figures", "FigS1_correlHist.png"), device = "png")
 
 
 # z-standardization
 
-df_trans_s_box_z <- apply(df_trans_s_box, 2, scale)
-describe(df_trans_s_box_z)
+df_trans_box_z <- apply(df_trans_box, 2, scale)
+describe(df_trans_box_z)
 
 
 # retranspose for clustering
 
-df_s_box_z <- t(df_trans_s_box_z)
+df_box_z <- t(df_trans_box_z)
 
 
 # hierarchical agglomerative clustering
 
-dd <- dist(df_s_box_z, method = "euclidean")
+dd <- dist(df_box_z, method = "euclidean")
 hc <- hclust(dd, method = "ward.D2")
 
 fviz_dend(hc)
-fviz_nbclust(df_s_box_z, FUN = hcut, method = "wss")
-fviz_nbclust(df_s_box_z, FUN = hcut, method = "silhouette")
+fviz_nbclust(df_box_z, FUN = hcut, method = "wss")
+fviz_nbclust(df_box_z, FUN = hcut, method = "silhouette")
+
+pdf(here("Figures", "Dendrogram.pdf"))
+fviz_dend(
+  hc,
+  k = 2,
+  horiz = TRUE,
+  rect = TRUE,
+  rect_fill = TRUE,
+  rect_border = "jco",
+  k_colors = "jco",
+  cex = 0.3
+)
+dev.off()
+
+clustAssign_hc <- cutree(hc, k = 2)
+
+write.csv(data.frame("Accession" = df$Accession, "clustAssign" = clustAssign_hc), here("results", "clusterMembership.csv"), row.names = FALSE)
+
+corM_Clust1 <- cor(df_trans_box_z[, clustAssign_hc == 1], use = "pairwise.complete")
+mean(corM_Clust1[upper.tri(corM_Clust1)])
+sd(corM_Clust1[upper.tri(corM_Clust1)])
+
+corM_Clust2 <- cor(df_trans_box_z[, clustAssign_hc == 2], use = "pairwise.complete")
+mean(corM_Clust2[upper.tri(corM_Clust2)])
+sd(corM_Clust2[upper.tri(corM_Clust2)])
 
 
 # dbscan
 
-kNNdistplot(df_s_box_z, k = 3)
-kNNdistplot(df_s_box_z, k = 5)
-kNNdistplot(df_s_box_z, k = 8)
+df_box_z_imp <- impute_median(df_box_z)
+
+kNNdistplot(df_box_z_imp, k = 3)
+kNNdistplot(df_box_z_imp, k = 5)
+kNNdistplot(df_box_z_imp, k = 8)
 
 
-res.fpc3 <- dbscan(df_s_box_z, eps = 5.5, minPts = 3)
+res.fpc3 <- dbscan(df_box_z_imp, eps = 7.8, minPts = 3)
 print(res.fpc3)
 
-res.fpc5 <- dbscan(df_s_box_z, eps = 6, minPts = 5)
+res.fpc5 <- dbscan(df_box_z_imp, eps = 7.8, minPts = 5)
 print(res.fpc5)
 
-res.fpc8 <- dbscan(df_s_box_z, eps = 6, minPts = 8)
+res.fpc8 <- dbscan(df_box_z_imp, eps = 7.8, minPts = 8)
 print(res.fpc8)
 
 
-clustAssign <- res.fpc8$cluster
+clustAssign <- res.fpc5$cluster
 
-mean(cor(df_trans_s[, clustAssign == 1]))
-sd(cor(df_trans_s[, clustAssign == 1]))
+mean(cor(df_trans_box[, clustAssign == 1], use = "pairwise.complete")[upper.tri(cor(df_trans_box[, clustAssign == 1]))])
+sd(cor(df_trans_box[, clustAssign == 1], use = "pairwise.complete")[upper.tri(cor(df_trans_box[, clustAssign == 1]))])
 
 mean(cor(df_trans_s[, clustAssign == 0]))
 
-corrplot(corrM_noMiss_box, order = "hclust", hclust.method = "ward.D2", addrect = 2)
+corrplot(corrM_box, order = "hclust", hclust.method = "ward.D2", addrect = 2)
 
 molFunctionClust1 <- df[fullDatInd, ][clustAssign, ][, "Molecular_Function"]
 molFunctionClust1

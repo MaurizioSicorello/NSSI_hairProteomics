@@ -2,8 +2,9 @@
 # nested k-fold CV evaluation of PLS
 PLSnestedCV <- function(outcome, predictors, nrepeats, nfolds, maxComps = 30, setSeed = 1000, classification = F){
   
-  fitControl <- trainControl(method = "cv",   
-                             number = nfolds)
+  fitControl <- trainControl(method = "repeatedcv",   
+                             number = nfolds, 
+                             repeats = nrepeats)
   
   # prepare input df
   df_pred = data.frame(outcome, predictors)
@@ -79,66 +80,38 @@ permutePLSnestedCV <- function(outcome, predictors, nrepeats, nfolds, nperms, ma
 }
 
 
-# perform variable selection within cross-validation
-PLS_selectPred <- function(data, n_select, nfolds = 5, selection){
+# function for cross-validation from DNA methylation mean
+meanCrossVal <- function(dv, data, nfolds = 5){
   
-  # output vector
-  accOut <- numeric(nfolds)
+  dfOut <- numeric(nfolds)
   
-  # cv split of data
-  plsFolds <- createFolds(data[,2], k = nfolds)
-  
-  # start cv loop
   for(i in 1:nfolds){
     
-    # train-test-split
-    trainSet <- data[-plsFolds[[i]],-1]
-    testSet <- data[plsFolds[[i]],-1]
+    dataNoMiss <- data[!is.na(data[, dv]), ]
+    folds <- createFolds(dataNoMiss[, dv], k = nfolds)
+    trainSet <- dataNoMiss[-folds[[1]], ]
+    testSet <- dataNoMiss[folds[[1]], ]
     
-    # perform PLS on training data
-    plsda_train <- caret::plsda(x = trainSet[,-1], y = factor(trainSet[,1]), ncomp = 3)
+    model <- lm(data = trainSet, 
+                as.formula(paste(dv, "~", "rowMeans.df_CpG_m.")))
     
-    # pick best X predictors based on variable importance
-    train_varImp <- data.frame("accession" = row.names(caret::varImp(plsda_train)), caret::varImp(plsda_train))
-    varImp_sorted <- train_varImp[order(train_varImp$Overall, decreasing = TRUE), ]
-    bestPreds <- varImp_sorted$accession[1:n_select]
-    
-    # indicator to include or remove best x predictors and group variable
-    if(selection == "include"){
-      varInd <- c(which(names(trainSet) %in% bestPreds))
-    }else if(selection == "exclude"){
-      varInd <- which(!(names(trainSet) %in% bestPreds))[-1]
-    }else{
-      warning("What are you even doing?! You are supposed to write 'exclude' or 'include'!")
-    }
-    
-    # retrain PLS on selected training data
-    plsda_retrain <- caret::plsda(x = trainSet[, varInd], y = factor(trainSet[,1]), ncomp = 3)
-    
-    # evaluate model on test data
-    accOut[i] <- sum(ifelse(testSet[,1] == predict(plsda_retrain, newdata = testSet[, varInd]), 1, 0))/nrow(testSet)
+    dfOut[i] <- 1 - sum((testSet[,dv] - predict(model, newdata = testSet))^2)/(var(testSet[,dv])*(nrow(testSet)-1))
     
   }
   
-  return(accOut)
+  return(dfOut)
   
 }
 
 
-# repeat function "PLS_selectPred" and save results
-
-PLS_selectPred_rep <- function(data, n_select, repeats = 5, nfolds = 5, selection){
+# function that repeats meanCrossVal "nrepeats" times
+repeatedMeanCrossVal <- function(dv, data, nrepeats, nfolds = 5){
   
-  dfOut <- data.frame(
-    matrix(nrow = nfolds, ncol = repeats)
-  )
-  
-  for(i in 1:repeats){
+  dfOut <- numeric(nrepeats)
+  for(i in 1:nrepeats){
     
-    dfOut[,i] <- PLS_selectPred(data=data, n_select=n_select, nfolds = nfolds, selection=selection)
+    dfOut[i] <- mean(meanCrossVal(dv, meanData))
     
   }
-  
-  return(stack(dfOut)$values)
-  
+  return(mean(dfOut))
 }
