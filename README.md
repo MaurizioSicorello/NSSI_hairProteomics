@@ -12,4 +12,7 @@ To run the scripts:
   install.packages("renv")
   library("renv")
   renv::restore()
+  ```
+
+The two R scripts on the top folder level are the main analysis scripts to run.
 
