@@ -6,7 +6,7 @@ library("MASS")
 library("missRanger")
 library("reshape")
 library("missMethods")
-library("wordcloud")
+#library("wordcloud")
 library("rgl")
 library("dplyr")
 library("ggExtra")
@@ -14,25 +14,13 @@ library("data.table")
 library("pROC")
 library("plotROC")
 library("psychometric")
-library("gameofthrones")
+#library("gameofthrones")
+library("flextable")
 
 source(here("functions", "PLS_helperFuns.R"))
+source(here("functions", "describeGroups.R"))
 
 
-# ANALYSIS PLAN
-# 1) permutation test of accuracy and model weights
-# 2) test effect of data imputation
-
-# QUESTIONS
-# where are most of the clinical/medication data for healthy controls? which dimensions to correlate with the predicted scores?
-# What is the best indicator for general psychopathology?
-# focus on imputed or unimputed model? (e.g., for correlation of predicted scores with clinical variables. tendency towards complete model)
-
-# NEXT STEPS
-# auf zusätzliche HC-Daten warten
-# Hauptmodell ist mit allen Variablen und Imputation
-
-# Tors typische Analyse nachmachen: Wie viele randomly sampled proteine braucht man für eine gute vorhersage? (0-200 ausprobieren)
 
 # paper title: Demonstrating the feasibility and applicability of untargeted hair proteomics for human psychopathology
 
@@ -74,14 +62,72 @@ names(df_clin)[3] <- "ID"
 
 
 
+# comparisons between clinical and HC where possible
+df_clin_compare <- df_clin[, c("Group", "Age", "BMI", "CTQ_total_score", "BSL_23_BPD_symptoms_2", "BSL_23_dysfunc_behav_2", "BSL_23_condition")]
+df_clin_compare$BMI <- as.numeric(df_clin_compare$BMI)
+df_clin_compare$Group <- ifelse(df_clin_compare$Group == 1, 0, 1)
+
+outTab <- describeGroups(df_clin_compare, "Group", names(df_clin_compare)[-1])
+outTab$Variable <- names(df_clin_compare)[-1]
+
+flextable(outTab)
+
+save_as_docx(flextable(outTab), path = here::here("tables", "groupComparisons.docx"))
+
+# disorders
+disorders <- describe(df_clin[, which(names(df_clin) == "Bipolar_I"):which(names(df_clin) == "Andere_DSM1")])
+disorders_present <- disorders[disorders$mean > 0, ]
+disorders_number <- data.frame(row.names(disorders_present), disorders_present$mean * disorders_present$n)
+names(disorders_number) <- c("disorder", "number")
+
+frequent_disorders <- disorders_number[disorders_number$number > 3, ] 
+
+other_disorders <- c("other disorders", sum(rowSums(df_clin[, disorders_number[disorders_number$number <= 3, 1]]) >= 1, na.rm=TRUE))
+
+
+# medication
+meds <- describe(df_clin[, which(names(df_clin) == "Long_term_Medication"):which(names(df_clin) == "Anxiolytics_Hypnotics")])
+meds_number <- data.frame(row.names(meds), meds$mean * meds$n)
+
+SSNRI <- c("SS(N)RI", sum(df_clin$SSRI + df_clin$SSNRI, na.rm=TRUE)) # SS(N)RI
+otherAD <- c("Other Antidepressant", sum(df_clin$TCA + df_clin$Other_antidepressants, na.rm=TRUE)) # other ADs
+neuroleptics <- c("Neuroleptics", sum(rowSums(df_clin[, c("Low_potency_neuroleptics", "Medium_potency_neuroleptics", "Atypical_neuroleptics")]) > 0, na.rm=TRUE)) # neuroleptics
+
+save_as_docx(flextable(rbind(frequent_disorders, other_disorders, SSNRI, otherAD, neuroleptics)), path = here::here("tables", "disordersMeds.docx"))
+
+
+formatMeanSD(as.numeric(df_clin$HEXACO_Emotionality))
+
+table(df_clin$Group)
+
+
+
+################
+# proteins in generalization sample
+protList_Generalization <- read.csv(here("data", "protListPLS_GeneralizationSample.csv"))[,1]
+
+
+
+
 ################################ 
 # Preprocessing
 
-# box-cox transformation of proteomics
-boxcoxTrans <- function(x){
+### box-cox transformation of proteomics
+
+# box cox helper function
+boxcoxLambda <- function(x){
   
   lambdaTrace <- boxcox(x ~ 1)
   lambda <- lambdaTrace$x[which.max(lambdaTrace$y)]
+  
+  return(lambda)
+  
+}
+
+# box cox transformation
+boxcoxTrans <- function(x){
+  
+  lambda <- boxcoxLambda(x)
   
   if(lambda == 0){
     x_trans <- log(x)
@@ -93,9 +139,25 @@ boxcoxTrans <- function(x){
   
 }
 
-
+# df without ID variable
 df_hair_trans_noID <- df_hair_trans[,-1]
+
+# box cox transformation of NSSI dataset
 df_hair_trans[, 2:ncol(df_hair_trans)] <- apply(df_hair_trans_noID, 2, boxcoxTrans)
+
+# export transformation parameters for generalization dataset
+df_prepro_gen <- df_hair_trans_noID[, protList_Generalization]
+gen_lambda <- apply(df_prepro_gen, 2, boxcoxLambda)
+df_prepro_gen_boxcox <- apply(df_prepro_gen, 2, boxcoxTrans)
+gen_means <- apply(df_prepro_gen_boxcox, 2, mean, na.rm = TRUE)
+gen_sd <- apply(df_prepro_gen_boxcox, 2, sd, na.rm = TRUE)
+
+preProPars <- data.frame("protList" = protList_Generalization, "Lambda" = gen_lambda, "Mean" = gen_means, "SD" = gen_sd)
+if(!file.exists(here("results", "preprocessingParameters.csv"))){
+  write.csv(preProPars, here("results", "preprocessingParameters.csv"), row.names = FALSE)
+}else{
+  warning("file already exists in folder")
+}
 
 
 # check for low variance predictors
@@ -145,25 +207,25 @@ baselineModel = train(
 baselineModel
 summary(baselineModel)
 
-# # permutation test
-# iterations <- 1000
-# 
-# accPerm_baseline <- numeric(iterations)
-# 
-# for(i in 1:iterations){
-#   
-#   df_clustMeans_perm <- data.frame("Group" = sample(df_clustMeans$Group), df_clustMeans[,-1])
-#   
-#   accPerm_baseline[i] <- train(
-#     form =  Group ~ .,
-#     data = df_clustMeans,
-#     trControl = trainControl(method = "cv", number = folds),
-#     method = "glm",
-#     family = "binomial")$results$Accuracy
-#   
-# }
-# 
-# write.csv(accPerm_baseline, here("results", "clustPerm_group.csv"), row.names = FALSE)
+# permutation test
+iterations <- 1000
+
+accPerm_baseline <- numeric(iterations)
+
+for(i in 1:iterations){
+
+  df_clustMeans_perm <- data.frame("Group" = sample(df_clustMeans$Group), df_clustMeans[,-1])
+
+  accPerm_baseline[i] <- train(
+    form =  factor(Group) ~ .,
+    data = df_clustMeans,
+    trControl = trainControl(method = "cv", number = folds),
+    method = "glm",
+    family = "binomial")$results$Accuracy
+
+}
+
+write.csv(accPerm_baseline, here("results", "clustPerm_group.csv"), row.names = FALSE)
 
 accPerm_baseline <- read.csv(here("results", "clustPerm_group.csv"))
 
@@ -173,6 +235,7 @@ sum(accPerm_baseline >= baselineModel$results$Accuracy)/nrow(accPerm_baseline)
 
 ################
 # PLS
+
 
 PLSmodel_group <- PLSnestedCV(outcome = dfpred_noMiss[,2], 
                               predictors = dfpred_noMiss[, -(1:2)],
@@ -185,25 +248,25 @@ PLSmodel_group <- PLSnestedCV(outcome = dfpred_noMiss[,2],
 PLSmodel_group
 
 
-# # test significance of PLS model
-# # [takes ~1h to run on my machine, therefore code is commented out]
-# PLSmodel_group_perm <- permutePLSnestedCV(outcome = dfpred_noMiss[,2],
-#                                           predictors = dfpred_noMiss[, -(1:2)],
-#                                           nrepeats = 1,
-#                                           nfolds = 5,
-#                                           nperms = 1000,
-#                                           maxComps = 30,
-#                                           setSeed = 200,
-#                                           classification = TRUE)
-# if(!file.exists(here("results", "PLSperm_group.csv"))){
-#   write.csv(PLSmodel_group_perm, here("results", "PLSperm_group.csv"), row.names = FALSE)
-# }else{
-#   warning("file already exists in folder")
-# }
+# test significance of PLS model
+# [takes ~1h to run on my machine, therefore code is commented out]
+PLSmodel_group_perm <- permutePLSnestedCV(outcome = dfpred_noMiss[,2],
+                                          predictors = dfpred_noMiss[, -(1:2)],
+                                          nrepeats = 1,
+                                          nfolds = 5,
+                                          nperms = 1000,
+                                          maxComps = 30,
+                                          setSeed = 200,
+                                          classification = TRUE)
+if(!file.exists(here("results", "PLSperm_group.csv"))){
+  write.csv(PLSmodel_group_perm, here("results", "PLSperm_group.csv"), row.names = FALSE)
+}else{
+  warning("file already exists in folder")
+}
 
 PLSperm_group <- read.csv(here("results", "PLSperm_group.csv"))
 sum(PLSperm_group >= PLSmodel_group$Accuracy)/length(PLSperm_group$x)
-
+hist(PLSperm_group$x)
 
 
 ################
@@ -220,6 +283,8 @@ PLSmodel_group_final = caret::plsda(x = dfpred_noMiss[,-c(1:2)],
 summary(PLSmodel_group_final)
 
 confusionMatrix(predict(PLSmodel_group_final, dfpred_noMiss[,-c(1:2)]), factor(dfpred_noMiss[, 2]))
+
+saveRDS(PLSmodel_group_final, here("results", "PLS_mainModel.rds"))
 
 
 
@@ -271,7 +336,8 @@ rfFit <- train(DV ~ ., data = PLSmodel_group$dat,
                method = "cforest", 
                trControl = fitControl,
                tuneGrid  = rfGrid)
-rfFit
+
+range(rfFit$results$Accuracy)
 
 
 
@@ -401,7 +467,7 @@ simCort <- function(effSize, N_HC, N_NSSI){
 }
 
 # simulations
-iterations = 100
+iterations = 1000
 d1_out <- numeric(iterations)
 d2_out <- numeric(iterations)
 
@@ -426,7 +492,7 @@ for(i in 1:iterations){
 }
 
 mean(d1_out)
-sd(d1_out)
+round(sd(d1_out) * 100, 1)
 
 
 # d = 0.478
@@ -449,11 +515,67 @@ for(i in 1:iterations){
 }
 
 mean(d2_out)
-sd(d2_out)
+round(sd(d2_out) * 100, 1)
+
+
+### repeat with larger samples
+
+d1_out <- numeric(iterations)
+d2_out <- numeric(iterations)
+
+
+# d = 0.213
+for(i in 1:iterations){
+  
+  set.seed(100+i)
+  df_simCort <- simCort(effSize = 0.213, N_HC = 250, N_NSSI = 250)
+  
+  set.seed(200+i)
+  d1_Model = train(
+    form =  factor(Group) ~ .,
+    data = df_simCort,
+    trControl = trainControl(method = "repeatedcv", number = folds, repeats = repeats),
+    method = "glm",
+    family = "binomial"
+  )
+  
+  d1_out[i] <- d1_Model$results$Accuracy
+  
+}
+
+mean(d1_out)
+round(sd(d1_out) * 100, 1)
+
+
+# d = 0.478
+for(i in 1:iterations){
+  
+  set.seed(100+i)
+  df_simCort <- simCort(effSize = 0.478, N_HC = 250, N_NSSI = 250)
+  
+  set.seed(200+i)
+  d2_Model = train(
+    form =  factor(Group) ~ .,
+    data = df_simCort,
+    trControl = trainControl(method = "repeatedcv", number = folds, repeats = repeats),
+    method = "glm",
+    family = "binomial"
+  )
+  
+  d2_out[i] <- d2_Model$results$Accuracy
+  
+}
+
+mean(d2_out)
+round(sd(d2_out) * 100, 1)
 
 
 
+df_simCort <- simCort(effSize = 0.478, N_HC = 250, N_NSSI = 250)
 
+summary(glm(factor(Group) ~ value, data = df_simCort, family = binomial))
+
+t.test(df_simCort[df_simCort$Group == "HC", "value"], df_simCort[df_simCort$Group == "NSSI", "value"])
 
 
 
@@ -516,25 +638,94 @@ if(!file.exists(here("results", "PLSbyExclusion.csv"))){
 }
 
 
+
+
+###############
+# Compare to random picks
+
+nRandomProteins = seq(5, 605, 5)
+randomAccOut = numeric(length(nRandomProteins))
+randomDraws = 25
+
+dfpred_random <- dfpred_noMiss[,-c(1:2)]
+dfcrit_random <- factor(dfpred_noMiss[,2])
+
+t1 <- Sys.time()
+
+for(i in 1:length(nRandomProteins)){
+  
+  cat(sprintf("\rIteration #: %d out of %d", i, length(nRandomProteins)))
+  flush.console()
+  
+  accTemp <- numeric(randomDraws)
+  
+  for(j in 1:randomDraws){
+    
+    
+    dfrandomCols <- dfpred_random[, sample(c(1:ncol(dfpred_random)), nRandomProteins[i])]
+    
+    # Fit PLS-DA with simple 5-fold cross-validation
+    PLSmodel_group_final <- train(
+      x = dfrandomCols,
+      y = dfcrit_random,
+      method = "pls",
+      tuneLength = 3,  
+      trControl = trainControl(method = "cv", number = 5) 
+    )
+    
+    accTemp[j] <-  PLSmodel_group_final$results[3, "Accuracy"]
+    
+  }
+  
+  randomAccOut[i] <- mean(accTemp)
+  
+  
+}
+
+t2 <- Sys.time()
+
+
+if(!file.exists(here("results", "PLSbyRandom.csv"))){
+  write.csv(data.frame(n_features=nRandomProteins, strategy=rep("random", length(nRandomProteins)), meanAcc=randomAccOut), here("results", "PLSbyRandom.csv"), row.names = FALSE)
+}else{
+  warning("file already exists in folder")
+}
+
+
+
 ######## plot number of necessary and sufficient features
 dfInclOut <- read.csv(here("results", "PLSbyInclusion.csv"))
 dfExcl_out <- read.csv(here("results", "PLSbyExclusion.csv"))
+dfRandom <- read.csv(here("results", "PLSbyRandom.csv"))
 
 dfPlotSelection <- rbind(dfInclOut, dfExcl_out)
 
 ggplot(data = dfPlotSelection, aes(y = meanAcc, x = n_features, color = strategy)) +
   
+  geom_smooth(data = dfRandom, aes(x = n_features, y = meanAcc, linetype = "random"), size = 1, se = FALSE, color = "black") +
+  
   geom_point() + 
   geom_smooth() +
   
   theme_classic() +
-  theme(legend.position = c(0.2, 0.2)) +
+  theme(legend.position = c(0.2, 0.2), legend.spacing.y = unit(0, "cm")) +
   
   scale_x_continuous("Number of best predictors included/excluded", breaks = seq(0, 600, 50)) +
   scale_y_continuous("Accuracy", breaks = seq(0.5, 1, 0.05), limits = c(0.5, 1)) +
-  scale_color_discrete(name = "Selection Strategy")
+  scale_color_discrete(name = "Selection strategy") +
+  scale_linetype_manual(name = NULL, values = c("random" = 2)) +
+  
+  guides(color = guide_legend(order = 1), linetype = guide_legend(order = 2))  
 
-ggsave(here("figures", "selection.png"))
+
+ggsave(here("figures", "selection_random.png"), width = 5.5, height = 5, units = "in", dpi = 300)
+
+
+
+
+
+  
+  
 
 
 
@@ -679,8 +870,8 @@ ggsave(here("figures", "dimensionalCorrelations.pdf"), device = "pdf")
 
 # correlation for NSSI participants only
 cor(df_predictClin[df_predictClin$Group == 1, c("predictValues", "Comp1", "Comp2", "Comp3", "CTQ_total_score", "Age", "Weigth", "Heigth", "Long_term_Medication", "Smoking", "Sport",
-                                                "BSL_23_BPD_symptoms_2")], use = "pairwise.complete.obs")
-
+                                                "BSL_23_BPD_symptoms_2", "BSL_23_dysfunc_behav_2", "BSL_23_condition")], use = "pairwise.complete.obs")
+hist(df_predictClin$BSL_23_condition)
 
 # age difference between groups
 t.test(df_predictClin[df_predictClin$Group == 0, "Age"], df_predictClin[df_predictClin$Group == 1, "Age"])
@@ -899,4 +1090,8 @@ ggsave(here("figures", "Figure1_singleEffects.pdf"), device = "pdf")
 
 
 ################################
+# cross-validation on new data
+
+
+
 

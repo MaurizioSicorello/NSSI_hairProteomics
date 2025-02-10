@@ -190,3 +190,13 @@ for(i in 2:length(cumVarExpl)){
 
 plot(cumVarExpl)
 length(cumVarExpl[cumVarExpl < 0.90])
+
+
+
+
+
+
+
+
+
+
