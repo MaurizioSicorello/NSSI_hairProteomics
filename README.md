@@ -1,4 +1,4 @@
-# NSSI_hairProteomics
+# Demonstrating the potential of untargeted hair proteomics for personalized biomarkers in stress-associated disorders
 
 Public repository does not contain the data folder, which is necessary to reproduce the analyses.
 Please contact us for data access.
