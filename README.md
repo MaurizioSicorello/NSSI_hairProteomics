@@ -5,7 +5,7 @@ Please contact us for data access.
 
 Analyes were conducted in R version 4.2.1
 Version-controlled packages are provided with the renv package. To run the scripts:
--Open the Rproect file "NSSI_hairProteomics"
--Install and load the package "renv" by typing install.packages("renv") and libary("renv"). Then, use the command
-renv::restore(). This will make sure you're working with the same package versions as we did.
--Not it should be possible to run the two analysis scripts
+< br / > -Open the Rproject file "NSSI_hairProteomics"
+< br / > -Install and load the package "renv" by typing install.packages("renv") and libary("renv"). Then, use the command
+< br / > -renv::restore(). This will make sure you're working with the same package versions as we did.
+< br / > -Not it should be possible to run the two analysis scripts
